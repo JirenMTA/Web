@@ -13,16 +13,16 @@
 
   <main class="wrap">
     <section class="card">
-      <div class="badge"><span class="dot"></span> Một điều tớ muốn nói với cậu…</div>
-      <h1 id="title">Gửi <span class="accent">[Tên của cậu]</span> 💗</h1>
-      <p class="sub">Có thể hơi ngại, nhưng tớ muốn nói rõ ràng một lần cho đúng.</p>
+      <div class="badge"><span class="dot"></span> Một điều anh muốn nói với em…</div>
+      <h1 id="title">Gửi <span class="accent">Em</span> 💗</h1>
+      <p class="sub">Có thể hơi ngại, nhưng anh muốn nói rõ ràng một lần cho đúng.</p>
 
       <div class="grid">
         <div class="box">
           <p class="type" id="typeArea"></p>
 
           <div class="meta">
-            <span class="chip">📍 Từ: <b id="fromName">[Tên của tớ]</b></span>
+            <span class="chip">📍 Từ: <b id="fromName">Anh</b></span>
             <span class="chip">📅 Ngày: <b id="today"></b></span>
             <span class="chip">💌 Mật mã: <b id="code">LOVE-2025</b></span>
           </div>
@@ -37,8 +37,9 @@
         <aside class="right">
           <div class="photo">
             <div class="hint">
-              📸 Chỗ này bạn có thể thay bằng ảnh 2 người
-              <small>(hoặc để vậy cũng dễ thương 😄)</small>
+              <img
+                src="https://scontent.fthd2-4.fna.fbcdn.net/v/t39.30808-6/484901514_1697483277505070_1338902325686328086_n.jpg?_nc_cat=111&ccb=1-7&_nc_sid=cc71e4&_nc_eui2=AeGSD80jgfQUBMfEEBjUl0ZhzDJozi0JGSXMMmjOLQkZJffNg2MuBHf3ydrJ7JJ6RyOf8jzEt5LJXvUhSS5dY348&_nc_ohc=N_u6qM2tl-IQ7kNvwHKnsaN&_nc_oc=Admd1GdV7u_hk24LSQSlWlcNptC-x7wBo2E2YMJ2-DfZnViXQDy-zlAU-4kOtYECWyI&_nc_zt=23&_nc_ht=scontent.fthd2-4.fna&_nc_gid=D_qxo83TnQjy2rC7nzR1nw&oh=00_AfmklueB7ffoJlQAK0dbu5LnfJQ-jTbEUPuhKBcaI_QyzQ&oe=694C916B"
+                alt="❤️" class="icon-heart" />
             </div>
 
             <!-- Nếu muốn dùng ảnh: mở comment và sửa đường dẫn
@@ -53,14 +54,14 @@
               <div class="tile"><b id="m">0</b><span>Minutes</span></div>
               <div class="tile"><b id="s">0</b><span>Seconds</span></div>
             </div>
-            <p class="sub center">⏳ Đếm ngược tới “lời hẹn” (bạn sửa ngày trong code)</p>
+            <p class="sub center">⏳ Đếm ngược tới “lời hẹn”</p>
           </div>
         </aside>
       </div>
 
       <div class="footer">
-        <span>Made with 💗</span>
-        <span>Tip: bấm “Không đâu” thử xem 😛</span>
+        <span>Made with HUNG_MTA💗</span>
+        <span>Tip: Thách em bấm “Không đâu” đấy 😛</span>
       </div>
     </section>
   </main>
@@ -72,8 +73,8 @@
       <h2>Thật ra là…</h2>
       <p id="moreText"></p>
       <div class="row">
-        <button class="yes" id="btnOk">Ừm… tớ cũng vậy 💘</button>
-        <button class="no" id="btnLater">Cho tớ suy nghĩ thêm 😳</button>
+        <button class="yes" id="btnOk">Ừm… em cũng vậy 💘</button>
+        <button class="no" id="btnLater">Cho em suy nghĩ thêm 😳</button>
       </div>
     </div>
   </div>
@@ -82,8 +83,8 @@
 
   <script>
     // ====== TUỲ CHỈNH NHANH Ở ĐÂY ======
-    const toName = "[Tên của cậu]";
-    const fromName = "[Tên của tớ]";
+    const toName = "Em";
+    const fromName = "Anh";
     const secretCode = "LOVE-2025";
 
     // Ngày “lời hẹn” để đếm ngược (đổi theo ý bạn)
@@ -91,22 +92,21 @@
     const targetDate = new Date("2026-01-01T00:00:00");
 
     const message =
-      `Cậu biết không…
-Mỗi lần nói chuyện với cậu, tớ đều thấy ngày hôm đó vui hơn một chút.
+      `Em biết không…
+Mỗi lần nói chuyện với em, anh đều thấy ngày hôm đó vui hơn một chút.
 
-Tớ không giỏi nói những lời sến súa,
-nhưng tớ nghiêm túc muốn hỏi:
+Anh không giỏi nói những lời sến súa,
+nhưng anh nghiêm túc muốn hỏi:
 
-Cậu có muốn làm người yêu tớ không? 💗`;
+Em có muốn làm người yêu anh không? 💗`;
 
-    const moreMessage =
-      `Nếu cậu đồng ý, tớ hứa sẽ:
-• Quan tâm cậu bằng những điều nhỏ nhất
-• Lắng nghe cậu nhiều hơn
-• Và luôn đứng về phía cậu
+    const moreMessage = `Nếu em đồng ý, anh hứa sẽ:<br><br>
+• Quan tâm em bằng những điều nhỏ nhất<br>
+• Lắng nghe em nhiều hơn<br>
+• Và luôn đứng về phía em<br><br>
+Còn nếu em chưa sẵn sàng,<br>
+thì anh vẫn muốn được ở cạnh em—như một người đặc biệt.`;
 
-Còn nếu cậu chưa sẵn sàng,
-thì tớ vẫn muốn được ở cạnh cậu—như một người đặc biệt.`;
 
     // ====== HIỂN THỊ NỘI DUNG ======
     document.querySelector("#title .accent").textContent = toName;
@@ -184,7 +184,7 @@ thì tớ vẫn muốn được ở cạnh cậu—như một người đặc bi
     const btnLater = document.getElementById("btnLater");
 
     btnNote.addEventListener("click", () => {
-      moreText.textContent = moreMessage;
+      moreText.innerHTML = moreMessage;
       modal.classList.add("open");
     });
 
@@ -309,9 +309,9 @@ thì tớ vẫn muốn được ở cạnh cậu—như một người đặc bi
       modal.classList.remove("open");
       typeArea.textContent =
         `Yay! 🎉
-Vậy từ giờ… cho tớ được gọi cậu là “người thương” nha 💞
+Vậy từ giờ… cho anh được gọi em là “Nhung Bếu” nha 💞
 
-Nhắn tớ một câu: “Đồng ý rồi đó!” 😚`;
+Nhắn anh một câu: “Đồng ý rồi đó!” 😚`;
       btnYes.disabled = true;
       btnNo.disabled = true;
       btnNote.disabled = true;
