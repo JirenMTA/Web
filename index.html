@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Gửi đến cậu 💌</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <div class="hearts" aria-hidden="true" id="hearts"></div>
+
+  <main class="wrap">
+    <section class="card">
+      <div class="badge"><span class="dot"></span> Một điều tớ muốn nói với cậu…</div>
+      <h1 id="title">Gửi <span class="accent">[Tên của cậu]</span> 💗</h1>
+      <p class="sub">Có thể hơi ngại, nhưng tớ muốn nói rõ ràng một lần cho đúng.</p>
+
+      <div class="grid">
+        <div class="box">
+          <p class="type" id="typeArea"></p>
+
+          <div class="meta">
+            <span class="chip">📍 Từ: <b id="fromName">[Tên của tớ]</b></span>
+            <span class="chip">📅 Ngày: <b id="today"></b></span>
+            <span class="chip">💌 Mật mã: <b id="code">LOVE-2025</b></span>
+          </div>
+
+          <div class="actions">
+            <button class="yes" id="btnYes">Đồng ý 💕</button>
+            <button class="no" id="btnNo">Không đâu 🙈</button>
+            <button class="ghost" id="btnNote">Đọc thêm một chút ✨</button>
+          </div>
+        </div>
+
+        <aside class="right">
+          <div class="photo">
+            <div class="hint">
+              📸 Chỗ này bạn có thể thay bằng ảnh 2 người
+              <small>(hoặc để vậy cũng dễ thương 😄)</small>
+            </div>
+
+            <!-- Nếu muốn dùng ảnh: mở comment và sửa đường dẫn
+            <img src="your-photo.jpg" alt="Ảnh của chúng mình" />
+            -->
+          </div>
+
+          <div class="box">
+            <div class="countdown" id="countdown">
+              <div class="tile"><b id="d">0</b><span>Days</span></div>
+              <div class="tile"><b id="h">0</b><span>Hours</span></div>
+              <div class="tile"><b id="m">0</b><span>Minutes</span></div>
+              <div class="tile"><b id="s">0</b><span>Seconds</span></div>
+            </div>
+            <p class="sub center">⏳ Đếm ngược tới “lời hẹn” (bạn sửa ngày trong code)</p>
+          </div>
+        </aside>
+      </div>
+
+      <div class="footer">
+        <span>Made with 💗</span>
+        <span>Tip: bấm “Không đâu” thử xem 😛</span>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal -->
+  <div class="modal" id="modal">
+    <div class="panel">
+      <button class="close" id="btnClose" aria-label="Đóng">✕</button>
+      <h2>Thật ra là…</h2>
+      <p id="moreText"></p>
+      <div class="row">
+        <button class="yes" id="btnOk">Ừm… tớ cũng vậy 💘</button>
+        <button class="no" id="btnLater">Cho tớ suy nghĩ thêm 😳</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confetti" id="confetti" aria-hidden="true"></div>
+
+  <script>
+    // ====== TUỲ CHỈNH NHANH Ở ĐÂY ======
+    const toName = "[Tên của cậu]";
+    const fromName = "[Tên của tớ]";
+    const secretCode = "LOVE-2025";
+
+    // Ngày “lời hẹn” để đếm ngược (đổi theo ý bạn)
+    // Ví dụ: new Date("2026-01-01T00:00:00")
+    const targetDate = new Date("2026-01-01T00:00:00");
+
+    const message =
+      `Cậu biết không…
+Mỗi lần nói chuyện với cậu, tớ đều thấy ngày hôm đó vui hơn một chút.
+
+Tớ không giỏi nói những lời sến súa,
+nhưng tớ nghiêm túc muốn hỏi:
+
+Cậu có muốn làm người yêu tớ không? 💗`;
+
+    const moreMessage =
+      `Nếu cậu đồng ý, tớ hứa sẽ:
+• Quan tâm cậu bằng những điều nhỏ nhất
+• Lắng nghe cậu nhiều hơn
+• Và luôn đứng về phía cậu
+
+Còn nếu cậu chưa sẵn sàng,
+thì tớ vẫn muốn được ở cạnh cậu—như một người đặc biệt.`;
+
+    // ====== HIỂN THỊ NỘI DUNG ======
+    document.querySelector("#title .accent").textContent = toName;
+    document.getElementById("fromName").textContent = fromName;
+    document.getElementById("code").textContent = secretCode;
+
+    const today = new Date();
+    document.getElementById("today").textContent =
+      today.toLocaleDateString("vi-VN", { year: "numeric", month: "long", day: "numeric" });
+
+    // Typing effect
+    const typeArea = document.getElementById("typeArea");
+    let i = 0;
+    function typeNext() {
+      typeArea.textContent = message.slice(0, i++);
+      if (i <= message.length) requestAnimationFrame(typeNext);
+    }
+    typeNext();
+
+    // ====== HEARTS BACKGROUND ======
+    const hearts = document.getElementById("hearts");
+    const HEARTS_COUNT = 28;
+    for (let k = 0; k <= HEARTS_COUNT; k++) {
+      const el = document.createElement("div");
+      el.className = "heart";
+      const left = Math.random() * 100;
+      const dur = 6 + Math.random() * 8;
+      const size = 10 + Math.random() * 18;
+      const delay = Math.random() * 6;
+
+      el.style.left = left + "vw";
+      el.style.animationDuration = dur + "s";
+      el.style.animationDelay = delay + "s";
+      el.style.width = size + "px";
+      el.style.height = size + "px";
+      hearts.appendChild(el);
+    }
+
+    // ====== COUNTDOWN ======
+    const $d = document.getElementById("d");
+    const $h = document.getElementById("h");
+    const $m = document.getElementById("m");
+    const $s = document.getElementById("s");
+
+    function tick() {
+      const now = new Date();
+      let diff = targetDate - now;
+      if (diff < 0) diff = 0;
+
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      diff -= days * (1000 * 60 * 60 * 24);
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      diff -= hours * (1000 * 60 * 60);
+      const mins = Math.floor(diff / (1000 * 60));
+      diff -= mins * (1000 * 60);
+      const secs = Math.floor(diff / 1000);
+
+      $d.textContent = days;
+      $h.textContent = hours;
+      $m.textContent = mins;
+      $s.textContent = secs;
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    // ====== BUTTON BEHAVIOR ======
+    const btnYes = document.getElementById("btnYes");
+    const btnNo = document.getElementById("btnNo");
+    const btnNote = document.getElementById("btnNote");
+
+    const modal = document.getElementById("modal");
+    const moreText = document.getElementById("moreText");
+    const btnClose = document.getElementById("btnClose");
+    const btnOk = document.getElementById("btnOk");
+    const btnLater = document.getElementById("btnLater");
+
+    btnNote.addEventListener("click", () => {
+      moreText.textContent = moreMessage;
+      modal.classList.add("open");
+    });
+
+    btnClose.addEventListener("click", () => modal.classList.remove("open"));
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.classList.remove("open");
+    });
+
+    // Nút "Không đâu" chạy trốn :))
+    // Nút "Không đâu" chạy trốn (di chuyển mượt)
+    let dodge = 0;
+    const actionsBox = btnNo.parentElement; // .actions
+
+    function rand(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+    // Nút "Không đâu" né chuột LIÊN TỤC (chuột đè lên vẫn chạy)
+    let tx = 0, ty = 0;
+
+    let mouseX = -9999, mouseY = -9999;
+    let cooldown = 0; // chống rung: chỉ nhảy mỗi ~120ms
+
+    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+    function randInt(min, max) {
+      if (min > max) [min, max] = [max, min];
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    // luôn cập nhật vị trí chuột (PC + mobile stylus)
+    document.addEventListener("pointermove", (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    }, { passive: true });
+
+    function moveNoButtonAway(rect) {
+      const margin = 12;       // khoảng an toàn mép màn hình
+      const limX = 220;        // mức chạy ngang tối đa mỗi lần
+      const limY = 90;         // mức chạy dọc tối đa mỗi lần (màn ngắn vẫn ổn)
+
+      // dx/dy cho phép để nút vẫn nằm trong viewport
+      const minDx = Math.max(-limX, margin - rect.left);
+      const maxDx = Math.min(limX, window.innerWidth - margin - rect.right);
+      const minDy = Math.max(-limY, margin - rect.top);
+      const maxDy = Math.min(limY, window.innerHeight - margin - rect.bottom);
+
+      // đẩy theo hướng tránh chuột (ưu tiên tránh trực tiếp)
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+
+      let dx = (mouseX < cx) ? randInt(40, maxDx) : randInt(minDx, -40);
+      let dy = (mouseY < cy) ? randInt(20, maxDy) : randInt(minDy, -20);
+
+      // nếu viewport chật theo 1 trục thì chuyển sang trục còn lại
+      if (maxDx < 30 && minDx > -30) dx = randInt(-limX, limX);
+      if (maxDy < 20 && minDy > -20) dy = 0; // màn thấp: hạn chế tụt xuống
+
+      // clamp lần cuối cho chắc
+      dx = clamp(dx, minDx, maxDx);
+      dy = clamp(dy, minDy, maxDy);
+
+      tx += dx;
+      ty += dy;
+
+      btnNo.style.transform = `translate(${tx}px, ${ty}px)`;
+      dodge++;
+      btnNo.style.opacity = Math.max(0.45, 1 - dodge * 0.07);
+    }
+
+    function loop() {
+      cooldown = Math.max(0, cooldown - 16);
+
+      const rect = btnNo.getBoundingClientRect();
+
+      // bán kính "nguy hiểm": chuột gần là chạy (kể cả đang đè lên)
+      const danger = 26; // tăng lên 40 nếu bạn muốn "nhạy" hơn
+
+      const inside =
+        mouseX >= rect.left - danger &&
+        mouseX <= rect.right + danger &&
+        mouseY >= rect.top - danger &&
+        mouseY <= rect.bottom + danger;
+
+      if (inside && cooldown === 0) {
+        moveNoButtonAway(rect);
+        cooldown = 120; // ms
+      }
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+
+    // Confetti khi đồng ý
+    const confetti = document.getElementById("confetti");
+    function popConfetti() {
+      confetti.innerHTML = "";
+      const n = 120;
+      for (let j = 0; j < n; j++) {
+        const piece = document.createElement("i");
+        const left = Math.random() * 100;
+        const delay = Math.random() * 0.3;
+        const dur = 2.8 + Math.random() * 1.8;
+        const w = 6 + Math.random() * 10;
+        const h = 10 + Math.random() * 16;
+
+        // màu ngẫu nhiên nhưng vẫn "tông tình yêu"
+        const palette = ["#ff4d6d", "#ff7a8c", "#7c3aed", "#f59e0b", "#10b981", "#3b82f6"];
+        piece.style.background = palette[Math.floor(Math.random() * palette.length)];
+
+        piece.style.left = left + "vw";
+        piece.style.animationDelay = delay + "s";
+        piece.style.animationDuration = dur + "s";
+        piece.style.width = w + "px";
+        piece.style.height = h + "px";
+        piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+        confetti.appendChild(piece);
+      }
+    }
+
+    function accept() {
+      popConfetti();
+      modal.classList.remove("open");
+      typeArea.textContent =
+        `Yay! 🎉
+Vậy từ giờ… cho tớ được gọi cậu là “người thương” nha 💞
+
+Nhắn tớ một câu: “Đồng ý rồi đó!” 😚`;
+      btnYes.disabled = true;
+      btnNo.disabled = true;
+      btnNote.disabled = true;
+      btnYes.style.opacity = .7;
+      btnNo.style.opacity = .7;
+      btnNote.style.opacity = .7;
+    }
+
+    btnYes.addEventListener("click", accept);
+    btnOk.addEventListener("click", accept);
+    btnLater.addEventListener("click", () => {
+      modal.classList.remove("open");
+      typeArea.textContent += "\n\n(Okiee, tớ đợi câu trả lời của cậu nha 🙂)";
+    });
+  </script>
+</body>
+
+</html>
