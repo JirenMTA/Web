@@ -67,6 +67,19 @@
     </section>
   </main>
 
+  <!-- ✅ Meme sound (đổi đường dẫn theo file của bạn) -->
+  <!-- Gợi ý: đặt file tại ./sounds/meme.mp3 -->
+  <audio id="memeAudio" src="No.mp3" preload="auto"></audio>
+
+  <!-- ✅ Sound cho "Đồng ý" & "Suy nghĩ thêm" (đổi đường dẫn theo file của bạn) -->
+  <!-- Gợi ý: đặt file tại ./sounds/yes.mp3 và ./sounds/later.mp3 -->
+  <audio id="yesAudio" src="Yes.mp3" preload="auto"></audio>
+  <audio id="laterAudio" src="Later.mp3" preload="auto"></audio>
+
+  <!-- ✅ Sound cho "Đọc thêm một chút" (đổi đường dẫn theo file của bạn) -->
+  <!-- Gợi ý: đặt file tại ./sounds/note.mp3 -->
+  <audio id="noteAudio" src="Later.mp3" preload="auto"></audio>
+
   <!-- Modal -->
   <div class="modal" id="modal">
     <div class="panel">
@@ -185,6 +198,8 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
     const btnLater = document.getElementById("btnLater");
 
     btnNote.addEventListener("click", () => {
+      // ✅ phát sound khi bấm "Đọc thêm"
+      playNote();
       moreText.innerHTML = moreMessage;
       modal.classList.add("open");
     });
@@ -193,9 +208,84 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
     modal.addEventListener("click", (e) => {
       if (e.target === modal) modal.classList.remove("open");
     });
+    // ====== 🔊 SOUND EFFECTS (meme / đồng ý / suy nghĩ thêm) ======
+    const memeAudio = document.getElementById("memeAudio");
+    const yesAudio = document.getElementById("yesAudio");
+    const laterAudio = document.getElementById("laterAudio");
+    const noteAudio = document.getElementById("noteAudio");
+
+    // chỉnh âm lượng (0 -> 1)
+    memeAudio.volume = 0.75;
+    yesAudio.volume = 0.9;
+    laterAudio.volume = 0.85;
+    noteAudio.volume = 0.8;
+
+    let audioUnlocked = false;
+
+    function safePlay(audioEl) {
+      try {
+        audioEl.currentTime = 0;
+        const p = audioEl.play();
+        // tránh warning unhandled promise
+        if (p && typeof p.catch === "function") p.catch(() => { });
+      } catch { }
+    }
+
+    // "Warm-up" để iOS/mobile cho phép phát âm thanh sau này
+    async function warmUp(audioEl) {
+      try {
+        audioEl.muted = true;
+        const p = audioEl.play();
+        if (p && typeof p.then === "function") await p;
+        audioEl.pause();
+        audioEl.currentTime = 0;
+        audioEl.muted = false;
+      } catch {
+        // ignore
+      }
+    }
+
+    async function unlockAudio() {
+      if (audioUnlocked) return;
+      // Cần 1 user-gesture (pointerdown/click) để unlock
+      await warmUp(memeAudio);
+      await warmUp(yesAudio);
+      await warmUp(laterAudio);
+      await warmUp(noteAudio);
+      audioUnlocked = true;
+    }
+
+    function playMeme() {
+      // gọi unlock trước, nhưng không chặn UI
+      unlockAudio();
+      safePlay(memeAudio);
+    }
+
+    function playYes() {
+      unlockAudio();
+      safePlay(yesAudio);
+    }
+
+    function playLater() {
+      unlockAudio();
+      safePlay(laterAudio);
+    }
+
+    function playNote() {
+      unlockAudio();
+      safePlay(noteAudio);
+    }
+
+    // unlock khi user chạm/click bất kỳ đâu lần đầu
+    document.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
+
+    // Nếu vẫn click được nút "Không đâu" (hiếm 😛) thì phát tiếng luôn
+    btnNo.addEventListener("click", playMeme);
+    btnNo.addEventListener("pointerdown", playMeme);
 
     // Nút "Không đâu" chạy trốn :))
     // Nút "Không đâu" chạy trốn (di chuyển mượt)
+    let noButtonActive = true; // dùng để dừng vòng lặp khi đã "Đồng ý"
     let dodge = 0;
     const actionsBox = btnNo.parentElement; // .actions
 
@@ -255,6 +345,9 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
     }
 
     function loop() {
+      // nếu nút đã bị ẩn (hoặc đã đồng ý) thì dừng hẳn animation loop
+      if (!noButtonActive || btnNo.offsetParent === null) return;
+
       cooldown = Math.max(0, cooldown - 16);
 
       const rect = btnNo.getBoundingClientRect();
@@ -269,6 +362,7 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
         mouseY <= rect.bottom + danger;
 
       if (inside && cooldown === 0) {
+        playMeme();             // ✅ phát meme sound khi user "tí nữa" chạm vào nút
         moveNoButtonAway(rect);
         cooldown = 120; // ms
       }
@@ -306,6 +400,15 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
     }
 
     function accept() {
+      // ✅ phát sound khi "Đồng ý"
+      playYes();
+
+      // ✅ Khi đã đồng ý: ẨN nút "Không đâu", "Suy nghĩ thêm" và "Đọc thêm"
+      noButtonActive = false;           // dừng loop né chuột
+      btnNo.style.display = "none";     // biến mất nút Không đâu (ngoài)
+      btnLater.style.display = "none";  // biến mất nút Suy nghĩ thêm (trong modal)
+      btnNote.style.display = "none";   // biến mất nút Đọc thêm (ngoài)
+
       popConfetti();
       modal.classList.remove("open");
       typeArea.textContent =
@@ -313,17 +416,17 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
 Vậy từ giờ… cho anh được gọi em là “Nhung Bếu” nha 💞
 
 Nhắn anh một câu: “Đồng ý rồi đó!” 😚`;
+
+      // Giữ lại nút "Đồng ý" (tắt) nếu bạn muốn
       btnYes.disabled = true;
-      btnNo.disabled = true;
-      btnNote.disabled = true;
       btnYes.style.opacity = .7;
-      btnNo.style.opacity = .7;
-      btnNote.style.opacity = .7;
     }
 
     btnYes.addEventListener("click", accept);
     btnOk.addEventListener("click", accept);
     btnLater.addEventListener("click", () => {
+      // ✅ phát sound khi "Suy nghĩ thêm"
+      playLater();
       modal.classList.remove("open");
       typeArea.textContent += "\n\n(Okiee, tớ đợi câu trả lời của cậu nha 🙂)";
     });
