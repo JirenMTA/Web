@@ -6,6 +6,12 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Gửi đến Nhung 💌</title>
   <link rel="stylesheet" href="style.css" />
+
+  <!-- ✅ Preload audio để lần mở đầu không phải chờ lâu (GitHub Pages cold cache) -->
+  <link rel="preload" as="audio" href="./sounds/meme.mp3" />
+  <link rel="preload" as="audio" href="./sounds/yes.mp3" />
+  <link rel="preload" as="audio" href="./sounds/later.mp3" />
+  <link rel="preload" as="audio" href="./sounds/note.mp3" />
 </head>
 
 <body>
@@ -94,6 +100,50 @@
   </div>
 
   <div class="confetti" id="confetti" aria-hidden="true"></div>
+
+  <!-- ✅ Sound Gate: bắt buộc 1 click/tap để browser cho phép phát âm thanh (đặc biệt trên iOS / mobile) -->
+  <div id="soundGate" class="sound-gate" role="button" aria-label="Bật âm thanh" tabindex="0">
+    🔊 Bấm vào đây để bật âm thanh
+    <small>(trình duyệt thường chặn auto‑play)</small>
+  </div>
+
+  <style>
+    .sound-gate {
+      position: fixed;
+      inset: auto 14px 14px auto;
+      z-index: 9999;
+      background: rgba(0, 0, 0, .72);
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 14px;
+      font-size: 14px;
+      line-height: 1.25;
+      cursor: pointer;
+      user-select: none;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: flex-start;
+      max-width: 220px;
+    }
+
+    .sound-gate small {
+      opacity: .85;
+      font-size: 12px
+    }
+
+    .sound-gate.hide {
+      display: none
+    }
+
+    .sound-gate:focus {
+      outline: 2px solid rgba(255, 255, 255, .55);
+      outline-offset: 2px
+    }
+  </style>
 
   <script>
     // ====== TUỲ CHỈNH NHANH Ở ĐÂY ======
@@ -208,11 +258,12 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
     modal.addEventListener("click", (e) => {
       if (e.target === modal) modal.classList.remove("open");
     });
-    // ====== 🔊 SOUND EFFECTS (meme / đồng ý / suy nghĩ thêm) ======
+    // ====== 🔊 SOUND EFFECTS (meme / đồng ý / suy nghĩ thêm / đọc thêm) ======
     const memeAudio = document.getElementById("memeAudio");
     const yesAudio = document.getElementById("yesAudio");
     const laterAudio = document.getElementById("laterAudio");
     const noteAudio = document.getElementById("noteAudio");
+    const soundGate = document.getElementById("soundGate");
 
     // chỉnh âm lượng (0 -> 1)
     memeAudio.volume = 0.75;
@@ -226,58 +277,60 @@ thì anh vẫn muốn được ở cạnh em—như một người đặc biệt
       try {
         audioEl.currentTime = 0;
         const p = audioEl.play();
-        // tránh warning unhandled promise
-        if (p && typeof p.catch === "function") p.catch(() => { });
-      } catch { }
-    }
-
-    // "Warm-up" để iOS/mobile cho phép phát âm thanh sau này
-    async function warmUp(audioEl) {
-      try {
-        audioEl.muted = true;
-        const p = audioEl.play();
-        if (p && typeof p.then === "function") await p;
-        audioEl.pause();
-        audioEl.currentTime = 0;
-        audioEl.muted = false;
-      } catch {
-        // ignore
+        if (p && typeof p.catch === "function") {
+          p.catch((err) => console.warn("Audio play blocked/failed:", audioEl?.id, err));
+        }
+      } catch (err) {
+        console.warn("Audio play exception:", audioEl?.id, err);
       }
     }
 
-    async function unlockAudio() {
+    // ✅ Unlock ngay trong user-gesture để lần bấm đầu tiên phát được ngay (không cần reload)
+    function unlockAudioSync() {
       if (audioUnlocked) return;
-      // Cần 1 user-gesture (pointerdown/click) để unlock
-      await warmUp(memeAudio);
-      await warmUp(yesAudio);
-      await warmUp(laterAudio);
-      await warmUp(noteAudio);
+
+      const audios = [memeAudio, yesAudio, laterAudio, noteAudio];
+      audios.forEach((a) => {
+        try {
+          a.preload = "auto";
+          a.muted = true;
+          const p = a.play();
+          if (p && typeof p.then === "function") {
+            p.then(() => {
+              a.pause();
+              a.currentTime = 0;
+              a.muted = false;
+            }).catch(() => { });
+          } else {
+            a.pause();
+            a.currentTime = 0;
+            a.muted = false;
+          }
+        } catch { }
+      });
+
       audioUnlocked = true;
+      if (soundGate) soundGate.classList.add("hide");
     }
 
-    function playMeme() {
-      // gọi unlock trước, nhưng không chặn UI
-      unlockAudio();
-      safePlay(memeAudio);
+    function playMeme() { unlockAudioSync(); safePlay(memeAudio); }
+    function playYes() { unlockAudioSync(); safePlay(yesAudio); }
+    function playLater() { unlockAudioSync(); safePlay(laterAudio); }
+    function playNote() { unlockAudioSync(); safePlay(noteAudio); }
+
+    // ✅ Sound Gate: click/tap để bật âm thanh (nhất là iOS/mobile)
+    if (soundGate) {
+      const enable = () => unlockAudioSync();
+      soundGate.addEventListener("click", enable);
+      soundGate.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") enable();
+      });
     }
 
-    function playYes() {
-      unlockAudio();
-      safePlay(yesAudio);
-    }
+    // unlock khi user chạm/click lần đầu ở bất kỳ đâu
+    document.addEventListener("pointerdown", unlockAudioSync, { once: true, passive: true });
+    document.addEventListener("keydown", unlockAudioSync, { once: true });
 
-    function playLater() {
-      unlockAudio();
-      safePlay(laterAudio);
-    }
-
-    function playNote() {
-      unlockAudio();
-      safePlay(noteAudio);
-    }
-
-    // unlock khi user chạm/click bất kỳ đâu lần đầu
-    document.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
 
     // Nếu vẫn click được nút "Không đâu" (hiếm 😛) thì phát tiếng luôn
     btnNo.addEventListener("click", playMeme);
