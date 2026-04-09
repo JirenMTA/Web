@@ -1,0 +1,1068 @@
+========================================
+FILE: main.m
+========================================
+function main()
+    clc;
+    close all;
+
+    % =========================
+    % 1) Radar parameters
+    % =========================
+    fc = 24e9;
+    B = 200e6;
+    fs = 10e6;
+    Tchirp = 1e-4;
+    Nchirp = 128;
+    Nsample = round(Tchirp * fs);
+
+    % Scan settings
+    nScans = 100;
+    scanPeriod = 0.3;    % s
+    scanTime = 0;
+
+    % =========================
+    % 2) Waveform
+    % =========================
+    waveform = simulate_signal(Tchirp, B, fs, Nchirp);
+
+    % =========================
+    % 3) Real targets at t = 0
+    % =========================
+    targets(1).Object = phased.RadarTarget('MeanRCS', 10, 'OperatingFrequency', fc);
+    targets(1).Velocity = [14; 0; 0];
+    targets(1).Range    = [253; 0; 0];
+
+    targets(2).Object = phased.RadarTarget('MeanRCS', 20, 'OperatingFrequency', fc);
+    targets(2).Velocity = [38; 0; 0];
+    targets(2).Range    = [213; 0; 0];
+
+    targets(3).Object = phased.RadarTarget('MeanRCS', 13, 'OperatingFrequency', fc);
+    targets(3).Velocity = [32; 0; 0];
+    targets(3).Range    = [321; 0; 0];
+
+    % =========================
+    % 4) Jammer config/state
+    % =========================
+    jammerCfg = drfm_default_config(fc, 'single_false', Tchirp);
+    jammerState = init_jammer_state();
+    jammerState.targetRealIndex = 1;   % target muốn seduce
+
+    % =========================
+    % 5) Tracker config/state
+    % =========================
+    dt = scanPeriod;
+    Q  = diag([0.1, 0.01]);
+    R  = diag([2.0, 0.5]);
+
+    tmCfg.confirmHits = 3;
+    tmCfg.maxMisses   = 3;
+    tmCfg.initCov     = diag([100, 10]);
+
+    gate.sigR      = 12;
+    gate.sigV      = 6;
+    gate.threshold = 9.21;
+
+    tracks = initTrackManager();
+
+    % =========================
+    % 6) Main scan loop
+    % =========================
+    for scanIdx = 1:nScans
+        % 1) Update jammer theo tracker hiện có (trước scan mới)
+        [jammerCfg, jammerState] = update_jammer_strategy( ...
+            jammerCfg, jammerState, scanIdx, scanTime, targets, tracks);
+
+        % 2) Radar scan
+        [RDdB, r_axis, v_axis, detCells, peakList, debugOut] = radar( ...
+            waveform, targets, fc, Nchirp, Nsample, scanTime, jammerCfg);
+
+        % 3) Format detections từ peakList
+        detections = formatDetectionsFromPeakList(peakList, r_axis, v_axis);
+
+        % 4) Predict tất cả tracks
+        tracks = predictTracks(tracks, dt, Q);
+
+        % 5) Jammer assist cho seduction
+        jammerAssist = buildJammerTrackerAssist(jammerState);
+
+        % 6) Association
+        [assocIdx, unassocDet] = associateDetections(tracks, detections, gate, R, jammerAssist);
+
+        % 7) Update / miss / new-track initiation
+        tracks = updateTracks(tracks, detections, assocIdx, unassocDet, R, tmCfg, jammerAssist);
+
+        % 8) Visualization
+        plotTrackingScene(RDdB, r_axis, v_axis, tracks, scanIdx, jammerState);
+
+        fprintf('\n[RGPO] scan=%d t=%.2f phase=%s targetTrackID=%s false=[%.2f, %.2f]\n', ...
+            scanIdx, scanTime, jammerState.phase, mat2str(jammerState.targetTrackID), ...
+            jammerState.expectedFalseMeasurement(1), jammerState.expectedFalseMeasurement(2));
+
+        if ~isempty(debugOut) && isfield(debugOut, 'JSRrealized_dB') && ~all(isnan(debugOut.JSRrealized_dB))
+            fprintf('[JAM] mean realized JSR = %.2f dB\n', mean(debugOut.JSRrealized_dB(~isnan(debugOut.JSRrealized_dB))));
+        end
+
+        scanTime = scanTime + dt;
+    end
+end
+
+========================================
+FILE: simulate_signal.m
+========================================
+function waveform = simulate_signal(Tchirp, B, fs, Nchirp)
+    waveform = phased.FMCWWaveform( ...
+        'SweepTime', Tchirp, ...
+        'SweepBandwidth', B, ...
+        'SampleRate', fs, ...
+        'SweepDirection', 'Up', ...
+        'NumSweeps', Nchirp);
+end
+
+========================================
+FILE: radar.m
+========================================
+function [RDdB, r_axis, v_axis, detCellsFinal, peakList, debugOut] = radar( ...
+    waveform, targets, fc, Nchirp, Nsample, currentTime, jammerCfg)
+
+    % =========================
+    % 1) Generate transmit burst
+    % =========================
+    sig_all = waveform();
+    sig_all = reshape(sig_all, Nsample, Nchirp);
+
+    fs = waveform.SampleRate;
+    Tchirp = waveform.SweepTime;
+    B = waveform.SweepBandwidth;
+
+    if nargin < 7 || isempty(jammerCfg)
+        jammerCfg = struct('enable', false);
+    end
+    if ~isfield(jammerCfg, 'enable')
+        jammerCfg.enable = false;
+    end
+    if ~isfield(jammerCfg, 'TchirpForPhase')
+        jammerCfg.TchirpForPhase = Tchirp;
+    end
+
+    % =========================
+    % 2) Radar front-end
+    % =========================
+    tx = phased.Transmitter('PeakPower', 1, 'Gain', 30);
+    rx = phased.ReceiverPreamp('Gain', 30, 'NoiseFigure', 4, 'SampleRate', fs);
+    ant = phased.IsotropicAntennaElement;
+    radiator = phased.Radiator('Sensor', ant, 'OperatingFrequency', fc);
+    collector = phased.Collector('Sensor', ant, 'OperatingFrequency', fc);
+    channel = phased.FreeSpace( ...
+        'SampleRate', fs, ...
+        'OperatingFrequency', fc, ...
+        'TwoWayPropagation', true);
+
+    tx_pos = [0;0;0];
+    tx_vel = [0;0;0];
+
+    % =========================
+    % 3) Real target states at current scan time
+    % =========================
+    numTargets = numel(targets);
+    tgt_platform = cell(1, numTargets);
+    for k = 1:numTargets
+        initPosThisScan = targets(k).Range + targets(k).Velocity * currentTime;
+        tgt_platform{k} = phased.Platform( ...
+            'InitialPosition', initPosThisScan, ...
+            'Velocity', targets(k).Velocity);
+    end
+
+    % =========================
+    % 4) Simulate data cube
+    % =========================
+    data_cube = complex(zeros(Nsample, Nchirp));
+
+    debugOut.P_real = zeros(1, Nchirp);
+    debugOut.P_rawjam = zeros(1, Nchirp);
+    debugOut.P_jam = zeros(1, Nchirp);
+    debugOut.JSRrealized_dB = nan(1, Nchirp);
+
+    for i = 1:Nchirp
+        txsig = tx(sig_all(:, i));
+        txsig = radiator(txsig, [0;0]);
+
+        total_rxsig = complex(zeros(size(txsig)));
+
+        % ---- real echoes ----
+        for k = 1:numTargets
+            [tgt_pos, tgt_vel] = tgt_platform{k}(Tchirp);
+            sig_k = channel(txsig, tx_pos, tgt_pos, tx_vel, tgt_vel);
+            sig_k = targets(k).Object(sig_k);
+            total_rxsig = total_rxsig + sig_k;
+        end
+
+        % ---- jammer ----
+        if jammerCfg.enable
+            raw_jam_sig = drfm_jammer_module(txsig, fs, fc, i, jammerCfg);
+            jam_sig = drfm_apply_jsr(raw_jam_sig, total_rxsig, jammerCfg.JSRdB);
+
+            debugOut.P_real(i) = mean(abs(total_rxsig).^2);
+            debugOut.P_rawjam(i) = mean(abs(raw_jam_sig).^2);
+            debugOut.P_jam(i) = mean(abs(jam_sig).^2);
+            debugOut.JSRrealized_dB(i) = 10*log10(debugOut.P_jam(i) / (debugOut.P_real(i) + eps));
+
+            total_rxsig = total_rxsig + jam_sig;
+        else
+            debugOut.P_real(i) = mean(abs(total_rxsig).^2);
+        end
+
+        total_rxsig = collector(total_rxsig, [0;0]);
+        total_rxsig = rx(total_rxsig);
+        data_cube(:, i) = dechirp(total_rxsig, sig_all(:, i));
+    end
+
+    % =========================
+    % 5) Build RD map
+    % =========================
+    [RDdB, r_axis, v_axis, RDpow] = build_rd_map(data_cube, fc, B, Tchirp, fs);
+
+    % =========================
+    % 6) Detect peaks
+    % =========================
+    [detCellsFinal, peakList] = find_peaks(RDpow, r_axis, v_axis);
+end
+
+========================================
+FILE: drfm_default_config.m
+========================================
+function cfg = drfm_default_config(fc, mode, Tchirp)
+    c = physconst('LightSpeed');
+    cfg.enable = true;
+    cfg.mode = mode;
+    cfg.lambda = c / fc;
+    cfg.JSRdB = -18;
+    cfg.TchirpForPhase = Tchirp;
+    cfg.initialPhase = 0;
+
+    % single/multi false
+    cfg.falseRanges = 120;
+    cfg.falseVelocities = 0;
+
+    % rgpo/vgpo seeded values at scan-level
+    cfg.baseRange = 120;
+    cfg.baseVelocity = 0;
+    cfg.pullOffRate = 5;        % m/s
+    cfg.pullOffAccel = 0.0;     % m/s^2
+    cfg.velocityWalk = 0.08;    % m/s/chirp
+    cfg.velocityAccel = 0.002;  % m/s/chirp^2
+
+    % range smear
+    cfg.centerRange = 140;
+    cfg.spanRange = 20;
+    cfg.numCopies = 6;
+    cfg.smearVelocity = 0;
+end
+
+========================================
+FILE: init_jammer_state.m
+========================================
+function state = init_jammer_state()
+% State cho jammer theo cơ chế RGPO seduction trên tracker
+% Trong mô hình này RGPO được thực hiện theo scan-level.
+
+    state.scanIdx = 1;
+    state.currentTime = 0;
+    state.scanPeriod = 0.3;          % s
+
+    % Policy chính
+    state.policy = 'rgpo_seduction';
+
+    % Target that jammer tries to seduce
+    state.targetRealIndex = 1;
+    state.targetTrackID = [];
+
+    % Seduction phases
+    state.phase = 'capture';
+    state.phaseStartTime = 0;
+    state.captureTime = 0.9;         % s
+
+    % Capture phase bias
+    state.initialRangeBias = 0.0;    % m
+    state.initialVelBias   = 0.0;    % m/s
+    state.captureRangeJitter = 0.15; % m
+
+    % Pull-off profile
+    state.pullOffRate = 4.0;         % m/s
+    state.pullOffAccel = 0.4;        % m/s^2
+    state.maxBiasRange = 60;         % m
+
+    % JSR profile
+    state.captureJSRdB = -8;
+    state.pullJSRdB = -4;
+
+    % Association assist
+    state.assistRange = 8;           % m
+    state.assistVel = 4;             % m/s
+    state.associationReward = 2.5;
+    state.powerRewardScale = 0.10;
+
+    % Reacquisition suppression around true target
+    state.reacqSuppressEnable = true;
+    state.reacqSuppressRange = 12;   % m
+    state.reacqSuppressVel = 6;      % m/s
+
+    % Runtime fields
+    state.currentRangeBias = 0;
+    state.expectedFalseMeasurement = [NaN; NaN];
+    state.trueReferenceMeasurement = [NaN; NaN];
+    state.selectedTrackState = [NaN; NaN];
+end
+
+========================================
+FILE: update_jammer_strategy.m
+========================================
+function [cfg, state] = update_jammer_strategy(cfg, state, scanIdx, currentTime, targets, tracks)
+% Update jammer theo thời gian và tracker
+% RGPO ở đây dùng cfg.mode='single_false' nhưng false target được cập nhật
+% mỗi scan theo cơ chế capture -> pull-off.
+
+    if nargin < 2 || isempty(state)
+        state = init_jammer_state();
+    end
+    if nargin < 6
+        tracks = [];
+    end
+
+    state.scanIdx = scanIdx;
+    state.currentTime = currentTime;
+
+    % True target reference measurement at current time
+    tgtIdx = min(max(state.targetRealIndex, 1), numel(targets));
+    truePos = targets(tgtIdx).Range + targets(tgtIdx).Velocity * currentTime;
+    Rtrue = truePos(1);
+    Vtrue = targets(tgtIdx).Velocity(1);
+    state.trueReferenceMeasurement = [Rtrue; Vtrue];
+
+    % Chọn track cần seduce
+    [selTrackID, selTrackState] = selectTargetTrack(tracks, state.targetTrackID, state.trueReferenceMeasurement, state.scanPeriod);
+    state.targetTrackID = selTrackID;
+    state.selectedTrackState = selTrackState;
+
+    % Reference measurement jammer will latch onto
+    if all(isfinite(selTrackState))
+        refMeas = selTrackState;
+    else
+        refMeas = [Rtrue; Vtrue];
+    end
+
+    % Phase transition
+    if strcmpi(state.phase, 'capture')
+        tPhase = currentTime - state.phaseStartTime;
+        if tPhase >= state.captureTime
+            state.phase = 'pulloff';
+            state.phaseStartTime = currentTime;
+            state.currentRangeBias = max(state.currentRangeBias, state.initialRangeBias);
+        end
+    end
+
+    switch lower(state.policy)
+        case 'rgpo_seduction'
+            if strcmpi(state.phase, 'capture')
+                tPhase = currentTime - state.phaseStartTime;
+                biasR = state.initialRangeBias + state.captureRangeJitter * sin(2*pi*0.5*tPhase);
+                biasV = state.initialVelBias;
+                jsrNow = state.captureJSRdB;
+            else
+                tPull = currentTime - state.phaseStartTime;
+                biasR = state.currentRangeBias + state.pullOffRate * tPull + 0.5 * state.pullOffAccel * tPull^2;
+                biasR = min(biasR, state.maxBiasRange);
+                biasV = state.initialVelBias + state.pullOffRate + state.pullOffAccel * tPull;
+                jsrNow = state.pullJSRdB;
+            end
+
+            state.currentRangeBias = biasR;
+
+            cfg.enable = true;
+            cfg.mode = 'single_false';
+            cfg.falseRanges = refMeas(1) + biasR;
+            cfg.falseVelocities = refMeas(2) + biasV;
+            cfg.JSRdB = jsrNow;
+
+            state.expectedFalseMeasurement = [cfg.falseRanges(1); cfg.falseVelocities(1)];
+
+        otherwise
+            error('Khong ho tro jammer state.policy = %s', state.policy);
+    end
+
+    cfg.falseRanges = max(cfg.falseRanges, 0);
+end
+
+========================================
+FILE: selectTargetTrack.m
+========================================
+function [trackID, trackStateNow] = selectTargetTrack(tracks, preferredTrackID, trueRefMeas, dt)
+% Chọn track cần seduce.
+% Ưu tiên:
+%   1) Track ID đã chọn trước đó nếu còn sống
+%   2) Confirmed track gần trueRefMeas nhất
+%   3) Tentative track gần trueRefMeas nhất
+
+    trackID = [];
+    trackStateNow = [NaN; NaN];
+
+    if isempty(tracks)
+        return;
+    end
+
+    % 1) preferred ID first
+    if ~isempty(preferredTrackID)
+        for k = 1:numel(tracks)
+            if tracks(k).id == preferredTrackID && ~strcmp(tracks(k).status, 'deleted')
+                trackID = tracks(k).id;
+                trackStateNow = predictTrackForJammer(tracks(k), dt);
+                return;
+            end
+        end
+    end
+
+    % 2) search confirmed first, then tentative
+    bestCost = inf;
+    bestIdx = 0;
+    for pass = 1:2
+        wantConfirmed = (pass == 1);
+        for k = 1:numel(tracks)
+            if strcmp(tracks(k).status, 'deleted')
+                continue;
+            end
+            if wantConfirmed && ~strcmp(tracks(k).status, 'confirmed')
+                continue;
+            end
+            if ~wantConfirmed && strcmp(tracks(k).status, 'confirmed')
+                continue;
+            end
+
+            xPred = predictTrackForJammer(tracks(k), dt);
+            innov = xPred - trueRefMeas;
+            cost = innov' * diag([1/20^2, 1/8^2]) * innov;
+            if cost < bestCost
+                bestCost = cost;
+                bestIdx = k;
+            end
+        end
+        if bestIdx > 0
+            trackID = tracks(bestIdx).id;
+            trackStateNow = predictTrackForJammer(tracks(bestIdx), dt);
+            return;
+        end
+    end
+end
+
+========================================
+FILE: predictTrackForJammer.m
+========================================
+function xPred = predictTrackForJammer(track, dt)
+    if isfield(track, 'statePred') && ~isempty(track.statePred)
+        xPred = track.statePred;
+        return;
+    end
+
+    F = [1 dt; 0 1];
+    xPred = F * track.state;
+end
+
+========================================
+FILE: buildJammerTrackerAssist.m
+========================================
+function jammerAssist = buildJammerTrackerAssist(state)
+    jammerAssist.enabled = strcmpi(state.policy, 'rgpo_seduction') && all(isfinite(state.expectedFalseMeasurement));
+    jammerAssist.targetTrackID = state.targetTrackID;
+    jammerAssist.expectedFalseMeas = state.expectedFalseMeasurement;
+    jammerAssist.assistRange = state.assistRange;
+    jammerAssist.assistVel = state.assistVel;
+    jammerAssist.costReward = state.associationReward;
+    jammerAssist.powerRewardScale = state.powerRewardScale;
+
+    jammerAssist.inhibitNewTrack = state.reacqSuppressEnable && strcmpi(state.phase, 'pulloff');
+    jammerAssist.inhibitCenter = state.trueReferenceMeasurement;
+    jammerAssist.inhibitGateR = state.reacqSuppressRange;
+    jammerAssist.inhibitGateV = state.reacqSuppressVel;
+end
+
+========================================
+FILE: drfm_jammer_module.m
+========================================
+function jam_sig = drfm_jammer_module(txsig, fs, fc, chirpIdx, cfg)
+    c = physconst('LightSpeed');
+    lambda = c / fc;
+
+    switch lower(cfg.mode)
+        case 'single_false'
+            Rf = cfg.falseRanges(1);
+            if isfield(cfg, 'falseVelocities') && ~isempty(cfg.falseVelocities)
+                Vf = cfg.falseVelocities(1);
+            else
+                Vf = 0;
+            end
+            jam_sig = drfm_false_target(txsig, fs, lambda, Rf, Vf, 1, chirpIdx, cfg);
+
+        case 'multi_false'
+            jam_sig = complex(zeros(size(txsig)));
+            nT = numel(cfg.falseRanges);
+            for k = 1:nT
+                Rf = cfg.falseRanges(k);
+                if isfield(cfg, 'falseVelocities') && numel(cfg.falseVelocities) >= k
+                    Vf = cfg.falseVelocities(k);
+                else
+                    Vf = 0;
+                end
+                amp_k = 1 / max(1, sqrt(nT));
+                jam_sig = jam_sig + drfm_false_target(txsig, fs, lambda, Rf, Vf, amp_k, chirpIdx, cfg);
+            end
+
+        case 'rgpo'
+            % Range-only pull-off within a CPI (ít khuyến nghị cho bài toán hiện tại)
+            t_slow = (chirpIdx - 1) * cfg.TchirpForPhase;
+            Rg = cfg.baseRange + cfg.pullOffRate * t_slow + 0.5 * cfg.pullOffAccel * t_slow^2;
+            Vg = cfg.baseVelocity + cfg.pullOffRate + cfg.pullOffAccel * t_slow;
+            jam_sig = drfm_false_target(txsig, fs, lambda, Rg, Vg, 1, chirpIdx, cfg);
+
+        case 'vgpo'
+            Rg = cfg.baseRange;
+            Vg = cfg.baseVelocity + cfg.velocityWalk*(chirpIdx - 1) + cfg.velocityAccel*(chirpIdx - 1)^2;
+            jam_sig = drfm_false_target(txsig, fs, lambda, Rg, Vg, 1, chirpIdx, cfg);
+
+        case 'rgpo_vgpo'
+            t_slow = (chirpIdx - 1) * cfg.TchirpForPhase;
+            Rg = cfg.baseRange + cfg.pullOffRate * t_slow + 0.5 * cfg.pullOffAccel * t_slow^2;
+            Vg_rgpo = cfg.baseVelocity + cfg.pullOffRate + cfg.pullOffAccel * t_slow;
+            Vg_vgpo = cfg.velocityWalk*(chirpIdx - 1) + cfg.velocityAccel*(chirpIdx - 1)^2;
+            Vg = Vg_rgpo + Vg_vgpo;
+            jam_sig = drfm_false_target(txsig, fs, lambda, Rg, Vg, 1, chirpIdx, cfg);
+
+        case 'range_smear'
+            jam_sig = drfm_range_smear(txsig, fs, fc, cfg.centerRange, cfg.spanRange, ...
+                cfg.numCopies, cfg.smearVelocity, chirpIdx, cfg);
+
+        otherwise
+            error('Che do DRFM khong hop le: %s', cfg.mode);
+    end
+end
+
+========================================
+FILE: drfm_apply_jsr.m
+========================================
+function jam_sig = drfm_apply_jsr(raw_jam_sig, ref_sig, JSRdB)
+    P_ref = max(mean(abs(ref_sig).^2), 1e-18);
+    P_jam = max(mean(abs(raw_jam_sig).^2), 1e-18);
+    targetRatio = 10^(JSRdB/10);
+    alpha = sqrt(targetRatio * P_ref / P_jam);
+    jam_sig = alpha * raw_jam_sig;
+end
+
+========================================
+FILE: drfm_false_target.m
+========================================
+function y = drfm_false_target(x, fs, lambda, Rfalse, Vfalse, amp, chirpIdx, cfg)
+    c = physconst('LightSpeed');
+    N = numel(x);
+    t_fast = (0:N-1).' / fs;
+
+    tau = 2 * Rfalse / c;
+    fd = 2 * Vfalse / lambda;
+
+    x_delayed = fractional_delay(x, fs, tau);
+    phase_fast = exp(1j * 2*pi * fd * t_fast);
+    t_slow = (chirpIdx - 1) * cfg.TchirpForPhase;
+    phase_slow = exp(1j * 2*pi * fd * t_slow);
+
+    if isfield(cfg, 'initialPhase')
+        phi0 = cfg.initialPhase;
+    else
+        phi0 = 0;
+    end
+
+    y = amp * x_delayed .* phase_fast .* phase_slow * exp(1j * phi0);
+end
+
+========================================
+FILE: drfm_range_smear.m
+========================================
+function jam_sig = drfm_range_smear(txsig, fs, fc, centerRange, spanRange, numCopies, vel, chirpIdx, cfg)
+    c = physconst('LightSpeed');
+    lambda = c / fc;
+    ranges = linspace(centerRange - spanRange/2, centerRange + spanRange/2, numCopies);
+    jam_sig = complex(zeros(size(txsig)));
+
+    for k = 1:numCopies
+        amp_k = 1 / sqrt(numCopies);
+        jam_sig = jam_sig + drfm_false_target(txsig, fs, lambda, ranges(k), vel, amp_k, chirpIdx, cfg);
+    end
+end
+
+========================================
+FILE: fractional_delay.m
+========================================
+function y = fractional_delay(x, fs, tau)
+    N = numel(x);
+    t = (0:N-1).' / fs;
+    ts = t - tau;
+
+    y_re = interp1(t, real(x), ts, 'linear', 0);
+    y_im = interp1(t, imag(x), ts, 'linear', 0);
+    y = complex(y_re, y_im);
+end
+
+========================================
+FILE: build_rd_map.m
+========================================
+function [RDdB, r_axis, v_axis, RDpow] = build_rd_map(data_cube, fc, B, Tchirp, fs)
+    c = physconst('LightSpeed');
+    lambda = c / fc;
+    slope = B / Tchirp;
+
+    [Nsample, Nchirp] = size(data_cube);
+
+    % Range FFT
+    winR = hann(Nsample);
+    data_r = data_cube .* winR;
+    sig_r = fft(data_r, Nsample, 1);
+    sig_r = sig_r / sum(winR);
+    sig_r = sig_r(1:Nsample/2, :);
+
+    % Doppler FFT
+    winD = hann(Nchirp).';
+    sig_r = sig_r .* winD;
+    sig_rd = fft(sig_r, Nchirp, 2);
+    sig_rd = sig_rd / sum(winD);
+    sig_rd = fftshift(sig_rd, 2);
+
+    % Axes
+    fb_axis = (0:Nsample/2 - 1) * (fs / Nsample);
+    r_axis = beat2range(fb_axis, slope, c);
+
+    PRF = 1 / Tchirp;
+    fd_axis = (-Nchirp/2 : Nchirp/2 - 1) * (PRF / Nchirp);
+    v_axis = fd_axis * lambda / 2;
+
+    RDpow = abs(sig_rd).^2;
+    RDdB = 10 * log10(RDpow + 1e-12);
+end
+
+========================================
+FILE: find_peaks.m
+========================================
+function [detCellsFinal, peakList] = find_peaks(RDpow, r_axis, v_axis)
+    numTrain = [10 4];
+    numGuard = [6 2];
+
+    Nr = size(RDpow, 1);
+    Nd = size(RDpow, 2);
+
+    rMargin = numTrain(1) + numGuard(1);
+    dMargin = numTrain(2) + numGuard(2);
+
+    if Nr <= 2*rMargin || Nd <= 2*dMargin
+        error('RD map qua nho cho cau hinh CFAR hien tai.');
+    end
+
+    rValid = (rMargin + 1) : (Nr - rMargin);
+    dValid = (dMargin + 1) : (Nd - dMargin);
+    [rr, dd] = ndgrid(rValid, dValid);
+    cutidx = [rr(:).'; dd(:).'];
+
+    trainCellsTotal = (2*(numTrain(1)+numGuard(1))+1) * ...
+                      (2*(numTrain(2)+numGuard(2))+1) - ...
+                      (2*numGuard(1)+1) * (2*numGuard(2)+1);
+    rankOS = round(0.75 * trainCellsTotal);
+
+    cfar2d = phased.CFARDetector2D( ...
+        'Method', 'OS', ...
+        'Rank', rankOS, ...
+        'GuardBandSize', numGuard, ...
+        'TrainingBandSize', numTrain, ...
+        'ProbabilityFalseAlarm', 1e-4, ...
+        'ThresholdOutputPort', true);
+
+    [detFlags, th] = cfar2d(RDpow, cutidx);
+    detCells = cutidx(:, detFlags);
+
+    if isempty(detCells)
+        fprintf('No detection.\n');
+        detCellsFinal = [];
+        peakList = [];
+        fprintf('So detections sau OS-CFAR + clustering + filter = 0\n');
+        return;
+    end
+
+    linIdx = sub2ind(size(RDpow), detCells(1,:), detCells(2,:));
+    detMap = false(size(RDpow));
+    detMap(linIdx) = true;
+
+    CC = bwconncomp(detMap, 8);
+    peakList = [];
+    thDet = th(detFlags);
+
+    for ic = 1:CC.NumObjects
+        pix = CC.PixelIdxList{ic};
+        [~, kmax] = max(RDpow(pix));
+        bestLin = pix(kmax);
+        [ir, iv] = ind2sub(size(RDpow), bestLin);
+        bestPow = RDpow(bestLin);
+
+        match = find(detCells(1,:) == ir & detCells(2,:) == iv, 1, 'first');
+        if isempty(match)
+            bestTh = min(thDet);
+        else
+            bestTh = thDet(match);
+        end
+
+        marginDb = 10 * log10(bestPow / (bestTh + eps));
+        clusterSize = numel(pix);
+        peakList(end+1, :) = [ir, iv, bestPow, bestTh, marginDb, clusterSize]; %#ok<AGROW>
+    end
+
+    marginDbMin = 10;
+    clusterSizeMin = 5;
+    % Debug nếu jammer khó thấy:
+    % marginDbMin = 6;
+    % clusterSizeMin = 1;
+
+    keep = peakList(:,5) >= marginDbMin & peakList(:,6) >= clusterSizeMin;
+    peakList = peakList(keep, :);
+
+    if isempty(peakList)
+        detCellsFinal = [];
+        fprintf('So detections sau OS-CFAR + clustering + filter = 0\n');
+        return;
+    end
+
+    [~, order] = sort(peakList(:,3), 'descend');
+    peakList = peakList(order, :);
+    detCellsFinal = peakList(:,1:2).';
+
+    fprintf('So detections sau OS-CFAR + clustering + filter = %d\n', size(detCellsFinal,2));
+    for k = 1:size(detCellsFinal,2)
+        ir = detCellsFinal(1,k);
+        iv = detCellsFinal(2,k);
+        fprintf(['Detection %d: R = %.2f m, V = %.2f m/s, P = %.3e, ' ...
+                 'Margin = %.2f dB, ClusterSize = %d\n'], ...
+                 k, r_axis(ir), v_axis(iv), peakList(k,3), peakList(k,5), peakList(k,6));
+    end
+end
+
+========================================
+FILE: formatDetectionsFromPeakList.m
+========================================
+function detections = formatDetectionsFromPeakList(peakList, r_axis, v_axis)
+% Chuyen peakList ma tran [ir, iv, pow, th, margin, clusterSize]
+% thanh detections Nx3 = [range, velocity, power]
+
+    if isempty(peakList)
+        detections = zeros(0, 3);
+        return;
+    end
+
+    ir = peakList(:, 1);
+    iv = peakList(:, 2);
+    pw = peakList(:, 3);
+
+    detections = [r_axis(ir).', v_axis(iv).', pw];
+end
+
+========================================
+FILE: initTrackManager.m
+========================================
+function tracks = initTrackManager()
+% Khoi tao track manager theo format track cua ban
+
+    tracks = struct( ...
+        'id', {}, ...
+        'state', {}, ...          % [range; velocity]
+        'P', {}, ...
+        'statePred', {}, ...      % predicted state cho scan hien tai
+        'PPred', {}, ...          % predicted covariance cho scan hien tai
+        'hits', {}, ...
+        'misses', {}, ...
+        'age', {}, ...
+        'status', {}, ...         % 'tentative' | 'confirmed' | 'deleted'
+        'history', {});
+end
+
+========================================
+FILE: predictTracks.m
+========================================
+function tracks = predictTracks(tracks, dt, Q)
+% Predict TAT CA cac track truoc khi association
+
+    for k = 1:numel(tracks)
+        if strcmp(tracks(k).status, 'deleted')
+            continue;
+        end
+
+        [statePred, PPred] = kalmanPredict(tracks(k).state, tracks(k).P, dt, Q);
+        tracks(k).statePred = statePred;
+        tracks(k).PPred = PPred;
+        tracks(k).age = tracks(k).age + 1;
+    end
+end
+
+========================================
+FILE: kalmanPredict.m
+========================================
+function [state_pred, P_pred] = kalmanPredict(state, P, dt, Q)
+% Predict bước tiếp theo
+% State: [range; velocity]
+% Model: constant velocity
+
+    F = [1, dt; ...
+         0,  1];
+
+    state_pred = F * state;
+    P_pred     = F * P * F' + Q;
+end
+
+========================================
+FILE: kalmanUpdate.m
+========================================
+function [state_upd, P_upd, innov] = kalmanUpdate(state_pred, P_pred, meas, R)
+% Update với measurement mới
+% meas = [r_meas; v_meas]
+
+    H = eye(2);
+    S = H * P_pred * H' + R;
+    K = P_pred * H' / S;
+
+    innov      = meas - H * state_pred;
+    state_upd  = state_pred + K * innov;
+    P_upd      = (eye(2) - K * H) * P_pred;
+end
+
+========================================
+FILE: associateDetections.m
+========================================
+function [assocIdx, unassocDet] = associateDetections(tracks, detections, gate, R, jammerAssist)
+% GNN association dùng predicted state/covariance
+% detections: Nx3 = [range, velocity, power]
+% jammerAssist (optional): hỗ trợ seduction cho 1 track cụ thể
+
+    if nargin < 5 || isempty(jammerAssist)
+        jammerAssist.enabled = false;
+    end
+
+    nTracks = numel(tracks);
+    nDets = size(detections, 1);
+
+    assocIdx = zeros(1, nTracks);
+    usedDet = false(1, nDets);
+
+    if nTracks == 0 || nDets == 0
+        unassocDet = 1:nDets;
+        return;
+    end
+
+    BIG = 1e9;
+    costMat = BIG * ones(nTracks, nDets);
+    H = eye(2);
+
+    for k = 1:nTracks
+        if strcmp(tracks(k).status, 'deleted')
+            continue;
+        end
+
+        xPred = tracks(k).statePred;
+        PPred = tracks(k).PPred;
+        S = H * PPred * H' + R;
+
+        for j = 1:nDets
+            meas = detections(j, 1:2)';
+            innov = meas - H * xPred;
+
+            % pre-gate rectangle
+            if abs(innov(1)) > gate.sigR || abs(innov(2)) > gate.sigV
+                continue;
+            end
+
+            dist = innov' / S * innov;
+            if dist >= gate.threshold
+                continue;
+            end
+
+            cost = dist;
+
+            % Seduction assist: ưu tiên detection gần false target expected
+            if jammerAssist.enabled && ~isempty(jammerAssist.targetTrackID) && tracks(k).id == jammerAssist.targetTrackID
+                dFalseR = abs(meas(1) - jammerAssist.expectedFalseMeas(1));
+                dFalseV = abs(meas(2) - jammerAssist.expectedFalseMeas(2));
+                if dFalseR <= jammerAssist.assistRange && dFalseV <= jammerAssist.assistVel
+                    reward = jammerAssist.costReward;
+                    if size(detections,2) >= 3
+                        reward = reward + jammerAssist.powerRewardScale * max(log10(detections(j,3) + eps), 0);
+                    end
+                    cost = max(cost - reward, 0);
+                end
+            end
+
+            costMat(k, j) = cost;
+        end
+    end
+
+    % Greedy GNN
+    while true
+        [bestCost, idx] = min(costMat(:));
+        if isempty(bestCost) || bestCost >= BIG
+            break;
+        end
+
+        [kBest, jBest] = ind2sub(size(costMat), idx);
+        if assocIdx(kBest) == 0 && ~usedDet(jBest)
+            assocIdx(kBest) = jBest;
+            usedDet(jBest) = true;
+        end
+
+        costMat(kBest, :) = BIG;
+        costMat(:, jBest) = BIG;
+    end
+
+    unassocDet = find(~usedDet);
+end
+
+========================================
+FILE: updateTracks.m
+========================================
+function tracks = updateTracks(tracks, detections, assocIdx, unassocDet, R, tmCfg, jammerAssist)
+% tmCfg:
+%   .confirmHits
+%   .maxMisses
+%   .initCov
+%
+% jammerAssist:
+%   .inhibitNewTrack
+%   .inhibitCenter
+%   .inhibitGateR/V
+
+    if nargin < 7 || isempty(jammerAssist)
+        jammerAssist.inhibitNewTrack = false;
+    end
+
+    %% --- Update tracks after association ---
+    for k = 1:numel(tracks)
+        if strcmp(tracks(k).status, 'deleted')
+            continue;
+        end
+
+        if isempty(tracks(k).statePred) || isempty(tracks(k).PPred)
+            tracks(k).statePred = tracks(k).state;
+            tracks(k).PPred = tracks(k).P;
+        end
+
+        if assocIdx(k) > 0
+            meas = detections(assocIdx(k), 1:2)';
+            [state_upd, P_upd, ~] = kalmanUpdate(tracks(k).statePred, tracks(k).PPred, meas, R);
+
+            tracks(k).state = state_upd;
+            tracks(k).P = P_upd;
+            tracks(k).hits = tracks(k).hits + 1;
+            tracks(k).misses = 0;
+
+            if strcmp(tracks(k).status, 'tentative') && tracks(k).hits >= tmCfg.confirmHits
+                tracks(k).status = 'confirmed';
+                fprintf('[TM] Track %d CONFIRMED\n', tracks(k).id);
+            end
+        else
+            tracks(k).state = tracks(k).statePred;
+            tracks(k).P = tracks(k).PPred;
+            tracks(k).misses = tracks(k).misses + 1;
+
+            if tracks(k).misses >= tmCfg.maxMisses
+                tracks(k).status = 'deleted';
+                fprintf('[TM] Track %d DELETED (miss=%d)\n', tracks(k).id, tracks(k).misses);
+            end
+        end
+
+        if ~strcmp(tracks(k).status, 'deleted')
+            tracks(k).history(end+1, :) = tracks(k).state';
+        end
+    end
+
+    %% --- Khởi tạo track mới từ detections chưa được gán ---
+    if isempty(tracks)
+        nextID = 1;
+    else
+        nextID = max([tracks.id]) + 1;
+    end
+
+    for jj = 1:numel(unassocDet)
+        j = unassocDet(jj);
+        meas = detections(j, 1:2)';
+
+        % Suppress reacquisition quanh target thật trong giai đoạn pull-off
+        if jammerAssist.inhibitNewTrack
+            dR = abs(meas(1) - jammerAssist.inhibitCenter(1));
+            dV = abs(meas(2) - jammerAssist.inhibitCenter(2));
+            if dR <= jammerAssist.inhibitGateR && dV <= jammerAssist.inhibitGateV
+                fprintf('[TM] New-track initiation suppressed near true target at r=%.1f, v=%.1f\n', meas(1), meas(2));
+                continue;
+            end
+        end
+
+        newTrack.id = nextID;
+        nextID = nextID + 1;
+        newTrack.state = meas;
+        newTrack.P = tmCfg.initCov;
+        newTrack.statePred = [];
+        newTrack.PPred = [];
+        newTrack.hits = 1;
+        newTrack.misses = 0;
+        newTrack.age = 1;
+        newTrack.status = 'tentative';
+        newTrack.history = meas.';
+
+        tracks(end+1) = newTrack; %#ok<AGROW>
+        fprintf('[TM] Track %d INITIATED at r=%.1f m, v=%.1f m/s\n', ...
+            newTrack.id, newTrack.state(1), newTrack.state(2));
+    end
+end
+
+========================================
+FILE: plotTrackingScene.m
+========================================
+function plotTrackingScene(RDdB, r_axis, v_axis, tracks, scanIdx, jammerState)
+    figure(100);
+    clf;
+    imagesc(v_axis, r_axis, RDdB);
+    axis xy;
+    xlabel('Velocity (m/s)');
+    ylabel('Range (m)');
+    title(sprintf('Scan %d | phase=%s', scanIdx, jammerState.phase));
+    colorbar;
+    colormap jet;
+    hold on;
+
+    % Plot tracks
+    for k = 1:numel(tracks)
+        if strcmp(tracks(k).status, 'deleted')
+            continue;
+        end
+
+        if strcmp(tracks(k).status, 'confirmed')
+            mk = 'wo';
+            txtColor = 'w';
+        else
+            mk = 'co';
+            txtColor = 'c';
+        end
+
+        plot(tracks(k).state(2), tracks(k).state(1), mk, 'MarkerSize', 8, 'LineWidth', 1.5);
+        text(tracks(k).state(2), tracks(k).state(1), sprintf(' T%d', tracks(k).id), ...
+            'Color', txtColor, 'FontSize', 10, 'FontWeight', 'bold');
+
+        if size(tracks(k).history, 1) >= 2
+            plot(tracks(k).history(:,2), tracks(k).history(:,1), '--', 'Color', [1 1 1]*0.8);
+        end
+    end
+
+    % Plot expected false target from jammer state
+    if all(isfinite(jammerState.expectedFalseMeasurement))
+        plot(jammerState.expectedFalseMeasurement(2), jammerState.expectedFalseMeasurement(1), ...
+            'ms', 'MarkerSize', 10, 'LineWidth', 1.5);
+        text(jammerState.expectedFalseMeasurement(2), jammerState.expectedFalseMeasurement(1), ...
+            ' false', 'Color', 'm', 'FontSize', 10, 'FontWeight', 'bold');
+    end
+
+    drawnow;
+end
