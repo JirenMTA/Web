@@ -1,5 +1,5 @@
-function [RDdB, detections] = radar( ...
-    waveform, targets, fc, Nchirp, Nsample, currentTime, jammerCfg)
+function [RDdB, detections, peakList] = radar( ...
+    waveform, targets, fc, Nchirp, Nsample, jammerCfg)
 
     % =========================
     % 1) Generate transmit burst
@@ -11,7 +11,8 @@ function [RDdB, detections] = radar( ...
     Tchirp = waveform.SweepTime;
     B = waveform.SweepBandwidth;
 
-    if nargin < 7 || isempty(jammerCfg)
+    % Luu y: function nay co 6 input, nen phai check nargin < 6
+    if nargin < 6 || isempty(jammerCfg)
         jammerCfg = struct('enable', false);
     end
     if ~isfield(jammerCfg, 'enable')
@@ -39,14 +40,12 @@ function [RDdB, detections] = radar( ...
 
     % =========================
     % 3) Real target states at current scan time
-    %    target.Range is assumed to be initial position at t = 0
     % =========================
     numTargets = numel(targets);
     tgt_platform = cell(1, numTargets);
     for k = 1:numTargets
-        initPosThisScan = targets(k).Range + targets(k).Velocity * currentTime;
         tgt_platform{k} = phased.Platform( ...
-            'InitialPosition', initPosThisScan, ...
+            'InitialPosition', targets(k).Range, ...
             'Velocity', targets(k).Velocity);
     end
 
@@ -55,38 +54,32 @@ function [RDdB, detections] = radar( ...
     % =========================
     data_cube = complex(zeros(Nsample, Nchirp));
 
-    debugOut.P_real = zeros(1, Nchirp);
-    debugOut.P_rawjam = zeros(1, Nchirp);
-    debugOut.P_jam = zeros(1, Nchirp);
-    debugOut.JSRrealized_dB = nan(1, Nchirp);
-
     for i = 1:Nchirp
         txsig = tx(sig_all(:, i));
         txsig = radiator(txsig, [0;0]);
 
         total_rxsig = complex(zeros(size(txsig)));
+        victim_echo = complex(zeros(size(txsig)));
 
         % ---- real echoes ----
         for k = 1:numTargets
             [tgt_pos, tgt_vel] = tgt_platform{k}(Tchirp);
             sig_k = channel(txsig, tx_pos, tgt_pos, tx_vel, tgt_vel);
             sig_k = targets(k).Object(sig_k);
+
             total_rxsig = total_rxsig + sig_k;
+
+            % target 1 la victim mac dinh
+            if k == 1
+                victim_echo = sig_k;
+            end
         end
 
         % ---- jammer ----
         if jammerCfg.enable
             raw_jam_sig = drfm_jammer_module(txsig, fs, fc, i, jammerCfg);
-            jam_sig = drfm_apply_jsr(raw_jam_sig, total_rxsig, jammerCfg.JSRdB);
-
-            debugOut.P_real(i) = mean(abs(total_rxsig).^2);
-            debugOut.P_rawjam(i) = mean(abs(raw_jam_sig).^2);
-            debugOut.P_jam(i) = mean(abs(jam_sig).^2);
-            debugOut.JSRrealized_dB(i) = 10*log10(debugOut.P_jam(i) / (debugOut.P_real(i) + eps));
-
+            jam_sig = drfm_apply_jsr(raw_jam_sig, victim_echo, jammerCfg.JSRdB);
             total_rxsig = total_rxsig + jam_sig;
-        else
-            debugOut.P_real(i) = mean(abs(total_rxsig).^2);
         end
 
         total_rxsig = collector(total_rxsig, [0;0]);
@@ -102,5 +95,5 @@ function [RDdB, detections] = radar( ...
     % =========================
     % 6) Detect peaks
     % =========================
-    [~, ~, detections] = find_peaks(RDpow, r_axis, v_axis);
+    [~, peakList, detections] = find_peaks(RDpow, r_axis, v_axis);
 end
